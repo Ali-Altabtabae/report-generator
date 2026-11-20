@@ -12,34 +12,36 @@ import { isValidIso } from './dates';
 import { MAX_PHOTOS_PER_GROUP } from './photos';
 
 export const APP_NAME = 'Transformer Department Report Generator';
-export const SCHEMA_VERSION = 1;
+/** Version 2 stores a list of reports. Version 1 files (a single report) still load. */
+export const SCHEMA_VERSION = 2;
 export const MAX_DRAFT_BYTES = 80 * 1024 * 1024;
+export const MAX_REPORTS = 30;
 
 export interface DraftFile {
   appName: string;
   schemaVersion: number;
   savedAt: string;
-  report: ReportData;
+  reports: ReportData[];
 }
 
-export function buildDraft(report: ReportData): string {
+export function buildDraft(reports: ReportData[]): string {
   const draft: DraftFile = {
     appName: APP_NAME,
     schemaVersion: SCHEMA_VERSION,
     savedAt: new Date().toISOString(),
     // Half-typed dates are not saved; only complete, valid dates are kept.
-    report: {
+    reports: reports.map((report) => ({
       ...report,
       startDate: isValidIso(report.startDate) ? report.startDate : '',
       finishDate: isValidIso(report.finishDate) ? report.finishDate : '',
       preparedDate: isValidIso(report.preparedDate) ? report.preparedDate : '',
-    },
+    })),
   };
   return JSON.stringify(draft, null, 2);
 }
 
 export interface LoadedDraft {
-  report: ReportData;
+  reports: ReportData[];
   savedAt: string;
   warnings: string[];
 }
@@ -86,28 +88,10 @@ function parseRows(v: unknown): InspectionRow[] {
   });
 }
 
-/**
- * Validate and parse a draft file. Never executes content — only JSON.parse plus strict
- * type checks. The saved station is matched by NO against the current list; it is never
- * substituted with a different record.
- */
-export function parseDraft(text: string, substations: Substation[]): LoadedDraft {
-  let data: unknown;
+/** Validate one report object. `label` (e.g. "Report 2: ") prefixes messages when a draft has several. */
+function parseReport(r: unknown, substations: Substation[], label: string): { report: ReportData; warnings: string[] } {
   try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error('This file is not valid JSON. It may be corrupted or not a report draft.');
-  }
-  try {
-    if (!isObj(data) || data.appName !== APP_NAME)
-      throw new DraftError('This file is not a Transformer Report Generator draft.');
-    if (data.schemaVersion !== SCHEMA_VERSION)
-      throw new DraftError(
-        `Unsupported draft version (${String(data.schemaVersion)}). This app supports version ${SCHEMA_VERSION}.`,
-      );
-    const r = data.report;
-    if (!isObj(r)) throw new DraftError('The draft has no report data.');
-
+    if (!isObj(r)) throw new DraftError('The report data is missing or invalid.');
     const warnings: string[] = [];
     const report = emptyReport();
 
@@ -153,22 +137,65 @@ export function parseDraft(text: string, substations: Substation[]): LoadedDraft
       const s = r.substation;
       if (!isObj(s) || typeof s.no !== 'number')
         throw new DraftError('The saved substation is invalid.');
-      const saved = { no: s.no, code: String(s.code ?? ''), fullName: String(s.fullName ?? '') };
+      const saved = { no: s.no as number, code: String(s.code ?? ''), fullName: String(s.fullName ?? '') };
       const current = substations.find((x) => x.no === saved.no);
       if (!current) {
         warnings.push(
-          `The saved substation (NO ${saved.no}: ${saved.code} — ${saved.fullName}) no longer exists in the current substation list. Please select the substation again.`,
+          `${label}The saved substation (NO ${saved.no}: ${saved.code} — ${saved.fullName}) no longer exists in the current substation list. Please select the substation again.`,
         );
       } else if (current.code !== saved.code || current.fullName !== saved.fullName) {
         warnings.push(
-          `The saved substation (NO ${saved.no}: ${saved.code} — ${saved.fullName}) has changed in the current list to ${current.code} — ${current.fullName}. Please confirm or select the substation again.`,
+          `${label}The saved substation (NO ${saved.no}: ${saved.code} — ${saved.fullName}) has changed in the current list to ${current.code} — ${current.fullName}. Please confirm or select the substation again.`,
         );
       } else {
         report.substation = current;
       }
     }
 
-    return { report, savedAt: typeof data.savedAt === 'string' ? data.savedAt : '', warnings };
+    return { report, warnings };
+  } catch (err) {
+    if (err instanceof DraftError) throw new DraftError(label + err.message);
+    throw err;
+  }
+}
+
+/**
+ * Validate and parse a draft file. Never executes content — only JSON.parse plus strict
+ * type checks. Saved stations are matched by NO against the current list; they are never
+ * substituted with a different record.
+ */
+export function parseDraft(text: string, substations: Substation[]): LoadedDraft {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error('This file is not valid JSON. It may be corrupted or not a report draft.');
+  }
+  try {
+    if (!isObj(data) || data.appName !== APP_NAME)
+      throw new DraftError('This file is not a Transformer Report Generator draft.');
+
+    let rawReports: unknown[];
+    if (data.schemaVersion === 1) {
+      rawReports = [data.report];
+    } else if (data.schemaVersion === SCHEMA_VERSION) {
+      if (!Array.isArray(data.reports) || data.reports.length === 0) throw new DraftError('The draft has no reports.');
+      rawReports = data.reports;
+    } else {
+      throw new DraftError(
+        `Unsupported draft version (${String(data.schemaVersion)}). This app supports versions 1 and ${SCHEMA_VERSION}.`,
+      );
+    }
+    if (rawReports.length > MAX_REPORTS) throw new DraftError(`The draft has more than ${MAX_REPORTS} reports.`);
+
+    const reports: ReportData[] = [];
+    const warnings: string[] = [];
+    rawReports.forEach((raw, i) => {
+      const res = parseReport(raw, substations, rawReports.length > 1 ? `Report ${i + 1}: ` : '');
+      reports.push(res.report);
+      warnings.push(...res.warnings);
+    });
+    return { reports, savedAt: typeof data.savedAt === 'string' ? data.savedAt : '', warnings };
   } catch (err) {
     if (err instanceof DraftError) throw new Error(`Could not load draft: ${err.message}`);
     throw err;

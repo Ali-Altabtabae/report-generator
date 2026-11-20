@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { it, expect } from 'vitest';
 import { renderToBuffer } from '@react-pdf/renderer';
 import { ReportDocument, registerPdfFonts } from '../src/lib/pdfExport';
-registerPdfFonts('src/assets/fonts/DejaVuSansCondensed.ttf', 'src/assets/fonts/DejaVuSansCondensed-Bold.ttf');
+registerPdfFonts('src/assets/fonts/DejaVuSansCondensed.ttf', 'src/assets/fonts/DejaVuSansCondensed-Bold.ttf', 'src/assets/fonts/DejaVuSerif-Bold.ttf');
 import { emptyReport, type ReportData } from '../src/types/report';
 
 // A small real JPEG (1x1) is fine for layout; use a generated PNG instead to test images.

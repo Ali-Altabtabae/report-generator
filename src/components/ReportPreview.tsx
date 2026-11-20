@@ -58,8 +58,10 @@ function PdfPreview({ report }: { report: ReportData }) {
   );
 }
 
-export function ReportPreview({ report }: { report: ReportData }) {
+export function ReportPreview({ reports, activeIndex }: { reports: ReportData[]; activeIndex: number }) {
   const [tab, setTab] = useState<Tab>('csv');
+  const report = reports[activeIndex];
+  const many = reports.length > 1;
   const row = buildCsvRow(report);
   const tabBtn = (t: Tab, label: string, Icon: typeof FileText) => (
     <button
@@ -87,6 +89,7 @@ export function ReportPreview({ report }: { report: ReportData }) {
       <div className="px-4 py-5 sm:px-6">
         {tab === 'csv' ? (
           <div className="space-y-4">
+            {many && <p className="text-xs text-slate-500">Showing row {activeIndex + 1} of {reports.length} (the report you are editing).</p>}
             <div className="overflow-hidden rounded-md border border-slate-200">
               <table className="w-full text-sm">
                 <tbody>
@@ -102,12 +105,15 @@ export function ReportPreview({ report }: { report: ReportData }) {
               </table>
             </div>
             <details className="text-xs">
-              <summary className="cursor-pointer font-medium text-slate-600">Show raw CSV text</summary>
-              <pre className="mt-2 overflow-x-auto rounded-md bg-slate-900 p-3 text-[11px] leading-relaxed text-slate-100">{buildCsv(report).replace(/^﻿/, '')}</pre>
+              <summary className="cursor-pointer font-medium text-slate-600">Show raw CSV text{many ? ` (all ${reports.length} rows)` : ''}</summary>
+              <pre className="mt-2 overflow-x-auto rounded-md bg-slate-900 p-3 text-[11px] leading-relaxed text-slate-100">{buildCsv(reports).replace(/^\uFEFF/, '')}</pre>
             </details>
           </div>
         ) : (
-          <PdfPreview report={report} />
+          <>
+            {many && <p className="mb-2 text-xs text-slate-500">Previewing report {activeIndex + 1} of {reports.length}. Each report is downloaded as its own PDF.</p>}
+            <PdfPreview report={report} />
+          </>
         )}
       </div>
     </section>

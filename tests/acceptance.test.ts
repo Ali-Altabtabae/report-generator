@@ -5,7 +5,7 @@ import { parseSubstationsCsv, searchSubstations, duplicateCodes } from '../src/l
 import { CSV_HEADERS, buildCsv, formatCsvEquipmentName } from '../src/lib/csvExport';
 import { validateReport } from '../src/lib/validation';
 import { buildDraft, parseDraft } from '../src/lib/draftJson';
-import { reportFilename } from '../src/lib/filenames';
+import { csvFilename, draftFilename, pdfFilenames, reportFilename } from '../src/lib/filenames';
 import { emptyReport, type ReportData } from '../src/types/report';
 
 const list = parseSubstationsCsv(readFileSync('public/data/substations.csv', 'utf8'));
@@ -61,7 +61,7 @@ describe('csv', () => {
   });
   it('has exactly 12 columns and correct escaping', () => {
     const r = { ...sample(), observations: 'pdf only', recommendations: 'pdf only', serialNumber: 'X', foremanNames: ['F1', 'F2'], preparedDate: '2026-11-13' };
-    const csv = buildCsv(r);
+    const csv = buildCsv([r]);
     expect(csv.startsWith('﻿')).toBe(true);
     expect(csv).toContain('"MISH ""A"" 30MVA TR 1"');
     expect(csv).toContain('"132kV, 33kV"');
@@ -80,7 +80,7 @@ describe('csv', () => {
     
   });
   it('blank finish date stays blank', () => {
-    const parsed = Papa.parse<string[]>(buildCsv({ ...sample(), finishDate: '' }).slice(1)).data;
+    const parsed = Papa.parse<string[]>(buildCsv([{ ...sample(), finishDate: '' }]).slice(1)).data;
     expect(parsed[1][6]).toBe('');
   });
   it('filename', () => {
@@ -102,36 +102,85 @@ describe('validation', () => {
 describe('draft json', () => {
   it('round-trips', () => {
     const r = { ...sample(), beforePhotos: [{ id: 'a', dataUrl: 'data:image/jpeg;base64,AAAA', caption: 'cap', width: 1, height: 1 }] };
-    const { report, warnings } = parseDraft(buildDraft(r), list);
+    const { reports: [report], warnings } = parseDraft(buildDraft([r]), list);
     expect(warnings).toEqual([]);
     expect(report.substation).toEqual(mishA);
     expect(report.voltages).toEqual(['132kV', '33kV']);
     expect(report.beforePhotos[0].caption).toBe('cap');
     expect(report.beforePhotos[0].dataUrl).toBe('data:image/jpeg;base64,AAAA');
     expect(report.startDate).toBe('2026-11-10');
-    const r2 = parseDraft(buildDraft({ ...sample(), foremanNames: ['A', 'B'], preparedDate: '2026-11-13' }), list).report;
+    const r2 = parseDraft(buildDraft([{ ...sample(), foremanNames: ['A', 'B'], preparedDate: '2026-11-13' }]), list).reports[0];
     expect(r2.foremanNames).toEqual(['A', 'B']);
     expect(r2.preparedDate).toBe('2026-11-13');
   });
   it('rejects invalid files', () => {
     expect(() => parseDraft('{not json', list)).toThrow(/not valid JSON/);
     expect(() => parseDraft('{"a":1}', list)).toThrow(/not a Transformer/);
-    const bad = JSON.parse(buildDraft(sample()));
-    bad.report.status = 'Completed';
+    const bad = JSON.parse(buildDraft([sample()]));
+    bad.reports[0].status = 'Completed';
     expect(() => parseDraft(JSON.stringify(bad), list)).toThrow(/Status/);
-    bad.report.status = 'Live';
+    bad.reports[0].status = 'Live';
     bad.schemaVersion = 99;
     expect(() => parseDraft(JSON.stringify(bad), list)).toThrow(/version/);
   });
   it('warns and never substitutes outdated stations', () => {
-    const d = JSON.parse(buildDraft(sample()));
-    d.report.substation = { no: 21, code: 'XXXX-A', fullName: 'GONE' };
+    const d = JSON.parse(buildDraft([sample()]));
+    d.reports[0].substation = { no: 21, code: 'XXXX-A', fullName: 'GONE' };
     let res = parseDraft(JSON.stringify(d), list);
-    expect(res.report.substation).toBeNull();
+    expect(res.reports[0].substation).toBeNull();
     expect(res.warnings[0]).toMatch(/no longer exists/);
-    d.report.substation = { ...mishA, fullName: 'MISHRIF OLD' };
+    d.reports[0].substation = { ...mishA, fullName: 'MISHRIF OLD' };
     res = parseDraft(JSON.stringify(d), list);
-    expect(res.report.substation).toBeNull();
+    expect(res.reports[0].substation).toBeNull();
     expect(res.warnings[0]).toMatch(/changed/);
+  });
+});
+
+describe('multiple reports', () => {
+  const second = (): ReportData => ({ ...sample(), substation: list.find((s) => s.code === 'SNPS')!, equipmentName: 'TR 2', voltages: ['33kV'] });
+
+  it('CSV has one header and one row per report', () => {
+    const csv = buildCsv([sample(), second(), sample()]);
+    const parsed = Papa.parse<string[]>(csv.slice(1), { skipEmptyLines: true }).data;
+    expect(parsed.length).toBe(4);
+    expect(parsed[0]).toEqual([...CSV_HEADERS]);
+    expect(parsed.slice(1).every((r) => r.length === 12)).toBe(true);
+    expect(parsed[1][1]).toBe('MISH "A" 30MVA TR 1');
+    expect(parsed[2][1]).toBe('SNPS TR 2');
+    expect(parsed[2][2]).toBe('33kV');
+    expect(parsed[3][8]).toBe('Line one\nLine two, with comma');
+  });
+
+  it('file names: one CSV, distinct PDF names', () => {
+    expect(csvFilename([sample()])).toBe(reportFilename(sample(), 'csv'));
+    expect(csvFilename([sample(), second()])).toMatch(/^Transformer_Reports_2_reports_\d{4}-\d{2}-\d{2}\.csv$/);
+    expect(pdfFilenames([sample()])).toEqual([reportFilename(sample(), 'pdf')]);
+    const names = pdfFilenames([sample(), second(), sample()]);
+    expect(new Set(names).size).toBe(3);
+    expect(names[0]).toMatch(/^Transformer_Report_MISH-A_30MVA_TR_1_\d{4}-\d{2}-\d{2}\.pdf$/);
+    expect(names[1]).toMatch(/^Transformer_Report_SNPS_TR_2_/);
+    expect(names[2]).toMatch(/_2\.pdf$/);
+    expect(draftFilename([sample(), second()])).toMatch(/^Transformer_Reports_Draft_2_reports_/);
+  });
+
+  it('draft round-trips several reports and still loads version 1 files', () => {
+    const { reports } = parseDraft(buildDraft([sample(), second()]), list);
+    expect(reports.length).toBe(2);
+    expect(reports[1].substation?.code).toBe('SNPS');
+    expect(reports[1].equipmentName).toBe('TR 2');
+
+    const v1 = JSON.stringify({ appName: 'Transformer Department Report Generator', schemaVersion: 1, savedAt: '', report: sample() });
+    const old = parseDraft(v1, list);
+    expect(old.reports.length).toBe(1);
+    expect(old.reports[0].substation).toEqual(mishA);
+  });
+
+  it('labels problems with the report number', () => {
+    const d = JSON.parse(buildDraft([sample(), second()]));
+    d.reports[1].status = 'Done';
+    expect(() => parseDraft(JSON.stringify(d), list)).toThrow(/Report 2: Invalid Status/);
+    d.reports[1].status = 'Live';
+    d.reports[1].substation = { no: 21, code: 'X-A', fullName: 'GONE' };
+    expect(parseDraft(JSON.stringify(d), list).warnings[0]).toMatch(/^Report 2: The saved substation/);
   });
 });

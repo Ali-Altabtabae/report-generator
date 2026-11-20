@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
-import { Document, Font, Image, Page, StyleSheet, Text, View, pdf } from '@react-pdf/renderer';
+import { Document, Font, Image, Page, StyleSheet, Text, View, pdf, type TextProps } from '@react-pdf/renderer';
 import type { Photo, ReportData } from '../types/report';
 import { isValidIso, isoToDisplay } from './dates';
 import regularFontUrl from '../assets/fonts/DejaVuSansCondensed.ttf?url';
 import boldFontUrl from '../assets/fonts/DejaVuSansCondensed-Bold.ttf?url';
+import headingFontUrl from '../assets/fonts/DejaVuSerif-Bold.ttf?url';
 
 // Keep words whole (no automatic hyphenation of engineering terms / IDs).
 Font.registerHyphenationCallback((word) => [word]);
@@ -13,8 +14,10 @@ Font.registerHyphenationCallback((word) => [word]);
  * symbols such as Ω, µ, °, ±, ≤ print correctly. Paths can be overridden for tests.
  */
 let fontsReady: Promise<void> | null = null;
-export function registerPdfFonts(regular: string, bold: string): void {
+export function registerPdfFonts(regular: string, bold: string, heading: string): void {
   Font.register({ family: 'DejaVu', fonts: [{ src: regular, fontWeight: 'normal' }, { src: bold, fontWeight: 'bold' }] });
+  // Serif face used only for section headings.
+  Font.register({ family: 'DejaVuSerif', fonts: [{ src: heading, fontWeight: 'bold' }] });
   fontsReady = Promise.resolve();
 }
 
@@ -26,8 +29,8 @@ export function preparePdfFonts(): Promise<void> {
       if (!res.ok) throw new Error(`Could not load PDF font (HTTP ${res.status}).`);
       return URL.createObjectURL(await res.blob());
     };
-    fontsReady = Promise.all([toBlobUrl(regularFontUrl), toBlobUrl(boldFontUrl)])
-      .then(([regular, bold]) => registerPdfFonts(regular, bold))
+    fontsReady = Promise.all([toBlobUrl(regularFontUrl), toBlobUrl(boldFontUrl), toBlobUrl(headingFontUrl)])
+      .then(([regular, bold, heading]) => registerPdfFonts(regular, bold, heading))
       .catch((e) => {
         fontsReady = null;
         throw e;
@@ -36,92 +39,168 @@ export function preparePdfFonts(): Promise<void> {
   return fontsReady;
 }
 
+/**
+ * Print-friendly palette: black body text, grey labels, hairline rules, no filled areas.
+ * Blue is used only for the report title and the section headings.
+ */
 const C = {
-  navy: '#1e3a5f',
-  blue: '#2563eb',
-  text: '#1f2937',
-  label: '#4b5563',
-  muted: '#6b7280',
-  line: '#d1d5db',
-  band: '#eef2f7',
+  titleBlue: '#1f3a68', // deep navy — report title
+  headBlue: '#2f5f9e', // medium blue — section headings
+  ink: '#111111',
+  label: '#4a4a4a',
+  muted: '#7a7a7a',
+  rule: '#111111',
+  hair: '#c4c4c4',
 };
 
 const s = StyleSheet.create({
-  page: { paddingTop: 36, paddingBottom: 56, paddingHorizontal: 40, fontFamily: 'DejaVu', fontSize: 9.5, color: C.text, lineHeight: 1.35 },
-  header: { borderBottomWidth: 2, borderBottomColor: C.navy, paddingBottom: 8, marginBottom: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
-  dept: { fontSize: 10, fontWeight: 'bold', color: C.blue, letterSpacing: 1.5 },
-  title: { fontSize: 16, fontWeight: 'bold', color: C.navy, marginTop: 2 },
-  headerMeta: { fontSize: 8.5, color: C.label, textAlign: 'right' },
-  section: { marginBottom: 12 },
-  sectionTitle: { fontSize: 10, fontWeight: 'bold', color: '#ffffff', backgroundColor: C.navy, paddingVertical: 4, paddingHorizontal: 8, marginBottom: 6, letterSpacing: 0.8 },
-  subTitle: { fontSize: 9.5, fontWeight: 'bold', color: C.navy, marginTop: 6, marginBottom: 4 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap' },
-  cell: { width: '50%', paddingVertical: 3, paddingRight: 10, flexDirection: 'row' },
-  cellFull: { width: '100%', paddingVertical: 3, flexDirection: 'row' },
-  label: { width: 110, color: C.label, fontWeight: 'bold', fontSize: 8.5 },
-  value: { flex: 1 },
-  missing: { flex: 1, color: C.muted },
-  block: { marginBottom: 6 },
-  blockLabel: { color: C.label, fontWeight: 'bold', fontSize: 8.5, marginBottom: 2 },
-  blockBody: { borderLeftWidth: 2, borderLeftColor: C.line, paddingLeft: 8 },
-  table: { borderWidth: 1, borderColor: C.line, marginTop: 2 },
-  tr: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.line },
-  th: { backgroundColor: C.band, fontWeight: 'bold', fontSize: 8.5, color: C.navy },
-  td: { padding: 4, borderRightWidth: 1, borderRightColor: C.line },
-  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  photoBox: { width: '48.5%', marginBottom: 10, borderWidth: 1, borderColor: C.line, padding: 4 },
-  photo: { width: '100%', height: 190, objectFit: 'contain', backgroundColor: '#f9fafb' },
-  caption: { fontSize: 8.5, color: C.label, marginTop: 4 },
+  page: { paddingTop: 40, paddingBottom: 60, paddingHorizontal: 44, fontFamily: 'DejaVu', fontSize: 9.5, color: C.ink, lineHeight: 1.4 },
+
+  // Title block (first page only)
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 },
+  dept: { fontSize: 8, letterSpacing: 2, color: C.label, paddingTop: 1 },
+  title: { fontSize: 16, fontWeight: 'bold', letterSpacing: 0.2, paddingBottom: 7, color: C.titleBlue },
+  metaRow: { flexDirection: 'row', justifyContent: 'flex-end', fontSize: 8 },
+  metaLabel: { color: C.label, width: 62, textAlign: 'right', marginRight: 6 },
+  metaValue: { fontWeight: 'bold', minWidth: 70 },
+  ruleThick: { borderBottomWidth: 1.6, borderBottomColor: C.rule },
+  ruleThin: { borderBottomWidth: 0.5, borderBottomColor: C.rule, marginTop: 1.5, marginBottom: 6 },
+
+  // Section headings: numbered, bold, underlined — clear without colour
+  sectionHead: { marginTop: 16, paddingBottom: 3, borderBottomWidth: 1, borderBottomColor: C.headBlue },
+  sectionTitle: { fontFamily: 'DejaVuSerif', fontSize: 11, fontWeight: 'bold', letterSpacing: 1, color: C.headBlue },
+  subHead: { fontSize: 9, fontWeight: 'bold', marginTop: 9, marginBottom: 3 },
+
+  // Label / value table
+  kvRow: { flexDirection: 'row', borderBottomWidth: 0.5, borderBottomColor: C.hair },
+  kvLabel: { width: '19%', paddingTop: 6.5, paddingBottom: 5, paddingRight: 6, fontSize: 8, fontWeight: 'bold', color: C.label },
+  kvValueHalf: { width: '62%', paddingVertical: 5, paddingRight: 8 },
+  kvValueFull: { width: '81%', paddingVertical: 5 },
+  missing: { color: C.muted },
+
+  // Free text
+  textBox: { borderWidth: 0.5, borderColor: C.hair, paddingVertical: 6, paddingHorizontal: 8 },
+
+  // Measurements table
+  tHead: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: C.rule, borderBottomWidth: 1, borderBottomColor: C.rule },
+  tRow: { flexDirection: 'row', borderBottomWidth: 0.5, borderBottomColor: C.hair },
+  th: { paddingVertical: 4, paddingRight: 6, fontSize: 8, fontWeight: 'bold', letterSpacing: 0.3 },
+  td: { paddingVertical: 4, paddingRight: 6 },
+  note: { fontSize: 7.5, color: C.muted, marginTop: 4 },
+
+  // Photographs
+  photoGrid: { flexDirection: 'row', justifyContent: 'space-between', flexShrink: 0 },
+  photoBox: { width: '48.5%', marginBottom: 10, borderWidth: 0.5, borderColor: C.hair, padding: 4, flexShrink: 0 },
+  // minHeight stops the layout engine from squeezing photos to fit a page; they move to the next page instead.
+  photo: { width: '100%', height: 185, minHeight: 185, objectFit: 'contain', flexShrink: 0 },
+  caption: { fontSize: 8, color: C.label, marginTop: 4 },
+
+  noShrink: { flexShrink: 0 },
+
   // Blank line for a handwritten date when no date was selected.
-  dateLine: { width: 140, borderBottomWidth: 1, borderBottomColor: C.text, height: 14 },
-  footer: { position: 'absolute', top: 841.89 - 40, left: 40, right: 40, flexDirection: 'row', justifyContent: 'space-between', fontSize: 7.5, color: C.muted, borderTopWidth: 1, borderTopColor: C.line, paddingTop: 5 },
+  dateLine: { width: 150, borderBottomWidth: 0.75, borderBottomColor: C.ink, height: 13 },
+
+  footer: { position: 'absolute', top: 841.89 - 42, left: 44, right: 44, flexDirection: 'row', justifyContent: 'space-between', fontSize: 7.5, color: C.muted, borderTopWidth: 0.5, borderTopColor: C.hair, paddingTop: 5 },
 });
 
 const NP = 'Not provided';
 const has = (v: string) => v.trim().length > 0;
 
-function Field({ label, value, full }: { label: string; value: string; full?: boolean }) {
+type TextStyle = Exclude<TextProps['style'], undefined | unknown[]>;
+
+function Value({ v, style }: { v: string; style: TextStyle }) {
+  return <Text style={has(v) ? style : [style, s.missing]}>{has(v) ? v : NP}</Text>;
+}
+
+type KV = { label: string; value: string; full?: boolean; node?: ReactNode };
+
+/** Label/value table, two pairs per row; `full` items take a whole row. */
+function KVTable({ items, heading }: { items: KV[]; heading?: ReactNode }) {
+  const rows: KV[][] = [];
+  let pending: KV[] = [];
+  for (const it of items) {
+    if (it.full) {
+      if (pending.length) rows.push(pending);
+      rows.push([it]);
+      pending = [];
+    } else {
+      pending.push(it);
+      if (pending.length === 2) {
+        rows.push(pending);
+        pending = [];
+      }
+    }
+  }
+  if (pending.length) rows.push(pending);
   return (
-    <View style={full ? s.cellFull : s.cell} wrap={false}>
-      <Text style={s.label}>{label}</Text>
-      <Text style={has(value) ? s.value : s.missing}>{has(value) ? value : NP}</Text>
+    <View>
+      {rows.map((row, i) => (
+        // The section heading travels with the first row so it is never left alone at a page bottom.
+        <View key={i} wrap={false}>
+          {i === 0 && heading}
+          <View style={s.kvRow}>
+            {row.map((it) => (
+              <View key={it.label} style={{ flexDirection: 'row', width: it.full ? '100%' : '50%' }}>
+                <Text style={[s.kvLabel, it.full ? { width: '19%' } : { width: '38%' }]}>{it.label}</Text>
+                {it.node ?? <Value v={it.value} style={it.full ? s.kvValueFull : s.kvValueHalf} />}
+              </View>
+            ))}
+          </View>
+        </View>
+      ))}
     </View>
   );
 }
 
-function TextBlock({ label, value }: { label: string; value: string }) {
+function SectionHead({ title }: { title: string }) {
   return (
-    <View style={s.block}>
-      <Text style={s.blockLabel} minPresenceAhead={24}>{label}</Text>
-      <View style={s.blockBody}>
-        <Text style={has(value) ? undefined : { color: C.muted }}>{has(value) ? value : NP}</Text>
+    <View style={s.sectionHead}>
+      <Text style={s.sectionTitle}>{title.toUpperCase()}</Text>
+    </View>
+  );
+}
+
+/** Rough line count, used to keep short text blocks in one piece. */
+const approxLines = (v: string) => v.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(line.length / 95)), 0);
+
+function TextBlock({ label, value, heading }: { label: string; value: string; heading?: ReactNode }) {
+  // Short blocks are kept in one piece. Long ones may split across pages, with the
+  // heading asked to stay with the start of the text.
+  const long = approxLines(value) > 12;
+  return (
+    <View wrap={long} style={s.noShrink}>
+      <View wrap={false} {...(long ? { minPresenceAhead: 36 } : {})}>
+        {heading}
+        <Text style={s.subHead}>{label}</Text>
+      </View>
+      <View style={s.textBox}>
+        <Value v={value} style={{}} />
       </View>
     </View>
   );
 }
 
-function SectionTitle({ children }: { children: string }) {
-  return <Text style={s.sectionTitle} minPresenceAhead={90}>{children}</Text>;
-}
-
 function Photos({ title, photos, heading }: { title: string; photos: Photo[]; heading?: ReactNode }) {
   if (photos.length === 0) return null;
-  const box = (p: Photo, i: number) => (
-    <View key={p.id} style={s.photoBox} wrap={false}>
-      <Image src={p.dataUrl} style={s.photo} />
-      <Text style={s.caption}>{has(p.caption) ? p.caption : `${title} — photo ${i + 1}`}</Text>
-    </View>
-  );
-  // Rows of two; the heading + subtitle stay attached to the first row.
   const rowsOfTwo: Photo[][] = [];
   for (let i = 0; i < photos.length; i += 2) rowsOfTwo.push(photos.slice(i, i + 2));
   return (
-    <View>
+    <View style={s.noShrink}>
       {rowsOfTwo.map((row, ri) => (
-        <View key={ri} wrap={false}>
+        <View key={ri} wrap={false} style={s.noShrink}>
           {ri === 0 && heading}
-          {ri === 0 && <Text style={s.subTitle}>{title}</Text>}
-          <View style={s.photoGrid}>{row.map((p, j) => box(p, ri * 2 + j))}</View>
+          {ri === 0 && <Text style={s.subHead}>{title}</Text>}
+          <View style={s.photoGrid}>
+            {row.map((p, j) => (
+              <View key={p.id} style={s.photoBox}>
+                <Image src={p.dataUrl} style={s.photo} />
+                <Text style={s.caption}>
+                  {title} {ri * 2 + j + 1}
+                  {has(p.caption) ? ` — ${p.caption}` : ''}
+                </Text>
+              </View>
+            ))}
+          </View>
         </View>
       ))}
     </View>
@@ -136,139 +215,169 @@ export function ReportDocument({ report: r, generatedAt }: { report: ReportData;
   const hasTech = hasEquipSpecs || rows.length > 0 || has(r.observations);
   const foremen = r.foremanNames.map((n) => n.trim()).filter(Boolean);
   const hasPhotos = r.beforePhotos.length + r.afterPhotos.length > 0;
-  const col = { p: '30%', v: '18%', u: '12%', r: '40%' };
+  const col = { p: '32%', v: '18%', u: '12%', r: '38%' };
+  const subject = [r.substation?.code, r.equipmentName.trim()].filter(Boolean).join(' · ');
+
+  const head = (title: string) => <SectionHead title={title} />;
 
   return (
-    <Document title={`Transformer Report ${r.substation?.code ?? ''} ${r.equipmentName}`.trim()} author={r.engineerName} creator="Transformer Department Report Generator" producer="Transformer Department Report Generator">
+    <Document
+      title={`Transformer Cable Report ${subject}`.trim()}
+      author={r.engineerName}
+      creator="Transformer Department — Cable Team"
+      producer="Transformer Department Report Generator"
+    >
       <Page size="A4" style={s.page}>
-        <View style={s.header} fixed>
-          <View>
-            <Text style={s.dept}>TRANSFORMER DEPARTMENT</Text>
-            <Text style={s.title}>MAINTENANCE &amp; REPAIR REPORT</Text>
-          </View>
-          <View>
-            <Text style={s.headerMeta}>Report date: {generatedAt.toLocaleDateString('en-GB')}</Text>
-            {has(r.reportReference) && <Text style={s.headerMeta}>Ref: {r.reportReference}</Text>}
-          </View>
-        </View>
-
         <View style={s.footer} fixed>
-          <Text>Generated {generated} · Transformer Department Report Generator</Text>
+          <Text>
+            Transformer Department · Cable Team{subject ? `  |  ${subject}` : ''}  |  Generated {generated}
+          </Text>
           <Text render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
         </View>
 
-        <View style={s.section}>
-          <SectionTitle>GENERAL INFORMATION</SectionTitle>
-          <View style={s.grid}>
-            <Field label="Engineer Name" value={r.engineerName} />
-            <Field label="Company Name" value={r.companyName} />
-            <Field label="Starting Date" value={isoToDisplay(r.startDate)} />
-            <Field label="Finishing Date" value={isoToDisplay(r.finishDate)} />
-            <Field label="Contract Number" value={r.contractNumber} />
-          </View>
-        </View>
-
-        <View style={s.section}>
-          <SectionTitle>EQUIPMENT INFORMATION</SectionTitle>
-          <View style={s.grid}>
-            <Field label="Substation" value={station} full />
-            <Field label="Equipment ID / Name" value={r.equipmentName} />
-            <Field label="Voltage" value={r.voltages.join(', ')} />
-            <Field label="Section" value={r.section} />
-            <Field label="Status" value={r.status} />
-          </View>
-        </View>
-
-        <View style={s.section}>
-          <SectionTitle>REPAIR INFORMATION</SectionTitle>
-          <TextBlock label="Reason of Repair" value={r.reasonOfRepair} />
-          <TextBlock label="Job Description" value={r.jobDescription} />
-          <TextBlock label="Materials Used" value={r.materialsUsed} />
-        </View>
-
-        {hasTech && (
-          <View style={s.section}>
-            {/* Keep the section heading on the same page as the first piece of content. */}
-            <View wrap={false}>
-              <SectionTitle>TECHNICAL / INSPECTION DETAILS</SectionTitle>
-              {hasEquipSpecs && (
-                <View style={s.grid}>
-                  <Field label="Type / Model" value={r.equipmentType} />
-                  <Field label="Serial Number" value={r.serialNumber} />
-                  <Field label="Rated Capacity" value={r.ratedCapacity} />
-                  <Field label="Location / Bay" value={r.location} />
-                </View>
-              )}
-              {!hasEquipSpecs && rows.length > 0 && <Text style={s.subTitle}>Inspection / Testing Notes</Text>}
-              {!hasEquipSpecs && rows.length === 0 && <Text style={s.blockLabel}>Work Performed / Observations</Text>}
+        <View style={s.headerTop}>
+          <Text style={s.dept}>TRANSFORMER DEPARTMENT · CABLE TEAM</Text>
+          <View>
+            <View style={s.metaRow}>
+              <Text style={s.metaLabel}>Report date</Text>
+              <Text style={s.metaValue}>{generatedAt.toLocaleDateString('en-GB')}</Text>
             </View>
-            {rows.length > 0 && (
-              <View>
-                {hasEquipSpecs && <Text style={s.subTitle} minPresenceAhead={40}>Inspection / Testing Notes</Text>}
-                <View style={s.table}>
-                  <View style={[s.tr, s.th]} fixed>
-                    <Text style={[s.td, { width: col.p }]}>Test / Parameter</Text>
-                    <Text style={[s.td, { width: col.v }]}>Measured Value</Text>
-                    <Text style={[s.td, { width: col.u }]}>Unit</Text>
-                    <Text style={[s.td, { width: col.r, borderRightWidth: 0 }]}>Result / Remarks</Text>
-                  </View>
-                  {rows.map((x, i) => (
-                    <View key={x.id} style={[s.tr, i === rows.length - 1 ? { borderBottomWidth: 0 } : {}]} wrap={false}>
-                      <Text style={[s.td, { width: col.p }]}>{x.parameter || '—'}</Text>
-                      <Text style={[s.td, { width: col.v }]}>{x.value || '—'}</Text>
-                      <Text style={[s.td, { width: col.u }]}>{x.unit || '—'}</Text>
-                      <Text style={[s.td, { width: col.r, borderRightWidth: 0 }]}>{x.remarks || '—'}</Text>
-                    </View>
-                  ))}
-                </View>
-                <Text style={{ fontSize: 7.5, color: C.muted, marginTop: 3 }}>
-                  Values are as recorded by the engineer; no automatic compliance judgement is applied.
-                </Text>
+            {has(r.reportReference) && (
+              <View style={s.metaRow}>
+                <Text style={s.metaLabel}>Reference</Text>
+                <Text style={s.metaValue}>{r.reportReference}</Text>
               </View>
             )}
-            {has(r.observations) &&
-              (!hasEquipSpecs && rows.length === 0 ? (
-                <View style={s.blockBody}>
-                  <Text>{r.observations}</Text>
-                </View>
-              ) : (
-                <View style={{ marginTop: 6 }}>
-                  <TextBlock label="Work Performed / Observations" value={r.observations} />
-                </View>
-              ))}
-          </View>
-        )}
-
-        {hasPhotos && (
-          <View style={s.section}>
-            <Photos title="Before Repair" photos={r.beforePhotos} heading={<SectionTitle>PHOTOGRAPHS</SectionTitle>} />
-            <Photos title="After Repair" photos={r.afterPhotos} heading={r.beforePhotos.length === 0 ? <SectionTitle>PHOTOGRAPHS</SectionTitle> : null} />
-          </View>
-        )}
-
-        {has(r.recommendations) && (
-          <View style={s.section}>
-            <SectionTitle>RECOMMENDATIONS / OUTSTANDING WORK</SectionTitle>
-            <View style={s.blockBody}>
-              <Text>{r.recommendations}</Text>
-            </View>
-          </View>
-        )}
-
-        <View style={s.section} wrap={false}>
-          <SectionTitle>PREPARED BY</SectionTitle>
-          <Field label="Prepared by" value={r.engineerName} full />
-          {foremen.length > 0 && <Field label={foremen.length > 1 ? 'Foremen' : 'Foreman'} value={foremen.join('\n')} full />}
-          <View style={s.cellFull}>
-            <Text style={s.label}>Date</Text>
-            {isValidIso(r.preparedDate) ? (
-              <Text style={s.value}>{isoToDisplay(r.preparedDate)}</Text>
-            ) : (
-              <View style={s.dateLine} />
-            )}
           </View>
         </View>
+        <Text style={s.title}>Transformer Cable Maintenance &amp; Repair Report</Text>
+        <View style={s.ruleThick} />
+        <View style={s.ruleThin} />
 
+        <KVTable
+          heading={head('Equipment Information')}
+          items={[
+            { label: 'Substation', value: station, full: true },
+            { label: 'Equipment ID / Name', value: r.equipmentName },
+            { label: 'Section', value: r.section },
+            { label: 'Voltage', value: r.voltages.join(', ') },
+            { label: 'Status', value: r.status, node: <Value v={r.status} style={{ ...s.kvValueHalf, fontWeight: 'bold' }} /> },
+          ]}
+        />
+
+        <KVTable
+          heading={head('Job Details')}
+          items={[
+            { label: 'Engineer', value: r.engineerName },
+            { label: 'Company', value: r.companyName },
+            { label: 'Starting Date', value: isoToDisplay(r.startDate) },
+            { label: 'Finishing Date', value: isoToDisplay(r.finishDate) },
+            { label: 'Contract No.', value: r.contractNumber, full: true },
+          ]}
+        />
+
+        <TextBlock heading={head('Repair Details')} label="Reason of Repair" value={r.reasonOfRepair} />
+        <TextBlock label="Job Description" value={r.jobDescription} />
+        <TextBlock label="Materials Used" value={r.materialsUsed} />
+
+        {hasTech && (
+          <>
+            {(() => {
+              const techHead = head('Technical / Inspection Details');
+              return (
+                <>
+                  {hasEquipSpecs && (
+                    <KVTable
+                      heading={techHead}
+                      items={[
+                        { label: 'Type / Model', value: r.equipmentType },
+                        { label: 'Serial Number', value: r.serialNumber },
+                        { label: 'Rated Capacity', value: r.ratedCapacity },
+                        { label: 'Location / Bay', value: r.location },
+                      ]}
+                    />
+                  )}
+                  {rows.length > 0 && (
+                    <>
+                      <View wrap={false}>
+                        {!hasEquipSpecs && techHead}
+                        <Text style={s.subHead}>Inspection / Testing Notes</Text>
+                        <View style={s.tHead}>
+                          <Text style={[s.th, { width: col.p }]}>TEST / PARAMETER</Text>
+                          <Text style={[s.th, { width: col.v }]}>MEASURED VALUE</Text>
+                          <Text style={[s.th, { width: col.u }]}>UNIT</Text>
+                          <Text style={[s.th, { width: col.r }]}>RESULT / REMARKS</Text>
+                        </View>
+                        {/* first row kept with the table header */}
+                        <View style={s.tRow}>
+                          <Text style={[s.td, { width: col.p }]}>{rows[0].parameter || '—'}</Text>
+                          <Text style={[s.td, { width: col.v }]}>{rows[0].value || '—'}</Text>
+                          <Text style={[s.td, { width: col.u }]}>{rows[0].unit || '—'}</Text>
+                          <Text style={[s.td, { width: col.r }]}>{rows[0].remarks || '—'}</Text>
+                        </View>
+                      </View>
+                      {rows.slice(1).map((x) => (
+                        <View key={x.id} style={s.tRow} wrap={false}>
+                          <Text style={[s.td, { width: col.p }]}>{x.parameter || '—'}</Text>
+                          <Text style={[s.td, { width: col.v }]}>{x.value || '—'}</Text>
+                          <Text style={[s.td, { width: col.u }]}>{x.unit || '—'}</Text>
+                          <Text style={[s.td, { width: col.r }]}>{x.remarks || '—'}</Text>
+                        </View>
+                      ))}
+                      <Text style={s.note}>Values are as recorded by the engineer; no automatic compliance judgement is applied.</Text>
+                    </>
+                  )}
+                  {has(r.observations) && (
+                    <TextBlock
+                      heading={!hasEquipSpecs && rows.length === 0 ? techHead : undefined}
+                      label="Work Performed / Observations"
+                      value={r.observations}
+                    />
+                  )}
+                </>
+              );
+            })()}
+          </>
+        )}
+
+        {hasPhotos &&
+          (() => {
+            const photoHead = head('Photographs');
+            return (
+              // No wrapping View here: an extra nesting level stops the PDF engine from
+              // moving photo rows to the next page (they overflow the page instead).
+              <>
+                <Photos title="Before repair" photos={r.beforePhotos} heading={photoHead} />
+                <Photos title="After repair" photos={r.afterPhotos} heading={r.beforePhotos.length === 0 ? photoHead : undefined} />
+              </>
+            );
+          })()}
+
+        {has(r.recommendations) && (
+          <TextBlock heading={head('Recommendations / Outstanding Work')} label="Recommendations" value={r.recommendations} />
+        )}
+
+        <View wrap={false}>
+          <KVTable
+            heading={head('Prepared By')}
+            items={[
+              { label: 'Engineer', value: r.engineerName, full: true },
+              ...(foremen.length > 0 ? [{ label: foremen.length > 1 ? 'Foremen' : 'Foreman', value: foremen.join('\n'), full: true }] : []),
+              {
+                label: 'Date',
+                value: '',
+                full: true,
+                node: isValidIso(r.preparedDate) ? (
+                  <Text style={s.kvValueFull}>{isoToDisplay(r.preparedDate)}</Text>
+                ) : (
+                  <View style={[s.kvValueFull, { paddingVertical: 4 }]}>
+                    <View style={s.dateLine} />
+                  </View>
+                ),
+              },
+            ]}
+          />
+        </View>
       </Page>
     </Document>
   );

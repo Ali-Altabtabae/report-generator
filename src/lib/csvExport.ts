@@ -65,8 +65,8 @@ export function buildCsvRow(r: ReportData): string[] {
   ];
 }
 
-/** Full CSV text: header + one row, CRLF line endings, UTF-8 BOM for Excel. */
-export function buildCsv(r: ReportData): string {
-  const lines = [CSV_HEADERS.map(escapeCsvCell).join(','), buildCsvRow(r).map(escapeCsvCell).join(',')];
-  return '﻿' + lines.join('\r\n') + '\r\n';
+/** Full CSV text: header + one row per report, CRLF line endings, UTF-8 BOM for Excel. */
+export function buildCsv(reports: ReportData[]): string {
+  const lines = [CSV_HEADERS.map(escapeCsvCell).join(','), ...reports.map((r) => buildCsvRow(r).map(escapeCsvCell).join(','))];
+  return '\uFEFF' + lines.join('\r\n') + '\r\n';
 }
